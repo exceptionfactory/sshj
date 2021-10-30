@@ -21,29 +21,25 @@ import net.schmizz.sshj.connection.ConnectionException;
 import org.slf4j.Logger;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class Window {
 
     protected final Logger log;
 
-    protected final Object lock = new Object();
-
     protected final int maxPacketSize;
 
-    protected long size;
+    protected AtomicLong size;
 
-    public Window(long initialWinSize, int maxPacketSize, LoggerFactory loggerFactory) {
-        size = initialWinSize;
+    public Window(final long initialWinSize, final int maxPacketSize, final LoggerFactory loggerFactory) {
+        size = new AtomicLong(initialWinSize);
         this.maxPacketSize = maxPacketSize;
         log = loggerFactory.getLogger(getClass());
     }
 
-    public void expand(long inc) {
-        synchronized (lock) {
-            size += inc;
-            log.debug("Increasing by {} up to {}", inc, size);
-            lock.notifyAll();
-        }
+    public void expand(final long increment) {
+        log.debug("Increasing Window Size [{}] by [{}]", size, increment);
+        size.getAndAdd(increment);
     }
 
     public int getMaxPacketSize() {
@@ -51,19 +47,14 @@ public abstract class Window {
     }
 
     public long getSize() {
-        synchronized (lock) {
-            return size;
-        }
+        return size.get();
     }
 
-    public void consume(long dec)
-            throws ConnectionException {
-        synchronized (lock) {
-            size -= dec;
-            log.debug("Consuming by {} down to {}", dec, size);
-            if (size < 0) {
-                throw new ConnectionException("Window consumed to below 0");
-            }
+    public void consume(final long decrement) throws ConnectionException {
+        log.debug("Decreasing Window Size [{}] by [{}]", size, decrement);
+        size.getAndAdd(-decrement);
+        if (size.get() < 0) {
+            throw new ConnectionException("Window consumed to below 0");
         }
     }
 
@@ -75,6 +66,8 @@ public abstract class Window {
     /** Controls how much data we can send before an adjustment notification from remote end is required. */
     public static final class Remote
             extends Window {
+        private static final long INCREMENTAL_SLEEP = 50;
+
         private final long timeoutMs;
 
         public Remote(long initialWinSize, int maxPacketSize, long timeoutMs, LoggerFactory loggerFactory) {
@@ -82,22 +75,22 @@ public abstract class Window {
             this.timeoutMs = timeoutMs;
         }
 
-        public long awaitExpansion(long was) throws ConnectionException {
-            synchronized (lock) {
-                long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-                while (size <= was) {
-                    log.debug("Waiting, need size to grow from {} bytes", was);
-                    try {
-                        lock.wait(timeoutMs);
-                        if ((size <= was) && ((System.nanoTime() - end) > 0)) {
-                            throw new ConnectionException("Timeout when trying to expand the window size");
-                        }
-                    } catch (InterruptedException ie) {
-                        throw new ConnectionException(ie);
+        public long awaitExpansion(final long previousWindowSize) throws ConnectionException {
+            log.debug("Awaiting expansion of Remote Window Size [{}]", previousWindowSize);
+
+            final long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+            while (size.get() <= previousWindowSize) {
+                try {
+                    Thread.sleep(INCREMENTAL_SLEEP);
+                    if ((System.nanoTime() - end) > 0) {
+                        final String message = String.format("Awaiting expansion of Remote Window Size Timeout [%d] exceeded", timeoutMs);
+                        throw new ConnectionException(message);
                     }
+                } catch (InterruptedException ie) {
+                    throw new ConnectionException("Awaiting expansion of Remote Window Size interrupted", ie);
                 }
-                return size;
             }
+            return size.get();
         }
 
         public void consume(long howMuch) {
@@ -107,7 +100,6 @@ public abstract class Window {
                 throw new SSHRuntimeException(e);
             }
         }
-
     }
 
     /** Controls how much data remote end can send before an adjustment notification from us is required. */
@@ -124,11 +116,7 @@ public abstract class Window {
         }
 
         public long neededAdjustment() {
-            synchronized (lock) {
-                return (size <= threshold) ? (initialSize - size) : 0;
-            }
+            return (size.get() <= threshold) ? (initialSize - size.get()) : 0;
         }
-
     }
-
 }
