@@ -18,47 +18,54 @@ package net.schmizz.sshj.transport.kex;
 import com.hierynomus.sshj.common.KeyAlgorithm;
 import net.schmizz.sshj.common.Factory;
 import net.schmizz.sshj.transport.random.Random;
-import org.bouncycastle.asn1.x9.X9ECParameters;
-import org.bouncycastle.crypto.ec.CustomNamedCurves;
-import org.bouncycastle.jce.spec.ECParameterSpec;
+import org.bouncycastle.math.ec.rfc7748.X25519;
 
 import java.math.BigInteger;
-import java.security.GeneralSecurityException;
 import java.security.spec.AlgorithmParameterSpec;
-import java.util.Arrays;
 
 public class Curve25519DH extends DHBase {
 
-    private byte[] secretKey;
+    private static final int KEY_LENGTH = 32;
+
+    private byte[] privateKey;
 
     public Curve25519DH() {
         super(KeyAlgorithm.ECDSA, "ECDH");
     }
 
+    /**
+     * Compute Shared Secret Key using Diffie-Hellman Curve25519 known as X25519
+     *
+     * @param peerPublicKey Peer public key bytes
+     */
     @Override
-    void computeK(byte[] f) throws GeneralSecurityException {
-        byte[] k = new byte[32];
-        djb.Curve25519.curve(k, secretKey, f);
-        setK(new BigInteger(1, k));
-    }
-
-    @Override
-    public void init(AlgorithmParameterSpec params, Factory<Random> randomFactory) throws GeneralSecurityException {
-        Random random = randomFactory.create();
-        byte[] secretBytes =  new byte[32];
-        random.fill(secretBytes);
-        byte[] publicBytes = new byte[32];
-        djb.Curve25519.keygen(publicBytes, null, secretBytes);
-        this.secretKey = Arrays.copyOf(secretBytes, secretBytes.length);
-        setE(publicBytes);
+    void computeK(final byte[] peerPublicKey) {
+        byte[] sharedSecretKey = new byte[KEY_LENGTH];
+        X25519.calculateAgreement(privateKey, 0, peerPublicKey, 0, sharedSecretKey, 0);
+        setK(new BigInteger(1, sharedSecretKey));
     }
 
     /**
-     * TODO want to figure out why BouncyCastle does not work.
-     * @return The initialized curve25519 parameter spec
+     * Initialize Public and Private Key Pair
+     *
+     * @param params Parameters are not used
+     * @param randomFactory Random Factory for generating private key
      */
-    public static AlgorithmParameterSpec getCurve25519Params() {
-        X9ECParameters ecP = CustomNamedCurves.getByName("curve25519");
-        return new ECParameterSpec(ecP.getCurve(), ecP.getG(), ecP.getN(), ecP.getH(), ecP.getSeed());
+    @Override
+    public void init(final AlgorithmParameterSpec params, final Factory<Random> randomFactory) {
+        generatePrivateKey(randomFactory);
+        generatePublicKey();
+    }
+
+    private void generatePrivateKey(final Factory<Random> randomFactory) {
+        final Random random = randomFactory.create();
+        privateKey = new byte[KEY_LENGTH];
+        random.fill(privateKey);
+    }
+
+    private void generatePublicKey() {
+        final byte[] publicKey = new byte[KEY_LENGTH];
+        X25519.generatePublicKey(privateKey, 0, publicKey, 0);
+        setE(publicKey);
     }
 }
