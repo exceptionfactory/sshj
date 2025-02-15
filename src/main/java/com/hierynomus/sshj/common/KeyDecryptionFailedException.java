@@ -15,8 +15,6 @@
  */
 package com.hierynomus.sshj.common;
 
-import org.bouncycastle.openssl.EncryptionException;
-
 import java.io.IOException;
 
 /**
@@ -32,7 +30,7 @@ public class KeyDecryptionFailedException extends IOException {
         super(MESSAGE);
     }
 
-    public KeyDecryptionFailedException(EncryptionException cause) {
+    public KeyDecryptionFailedException(IOException cause) {
         super(MESSAGE, cause);
     }
 
